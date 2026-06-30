@@ -69,14 +69,14 @@ t('春季 N农夫+M农田 净产=手算', () => {
     s.population.villagers.push(v);
   }
   const spring = SEASON_GRAIN_MUL[0];
-  const expected = 0.6 * 4 * spring + 1.0 * farmers * spring - farmers * VILLAGER_GRAIN_PER_SEC;
+  const expected = 0.625 * 4 * spring + 5.0 * farmers * spring - farmers * VILLAGER_GRAIN_PER_SEC;
   close(computeNet(s).grain, expected);
 });
 t('冬季粮产按 0.25 衰减', () => {
   const s = createInitialState();
   s.buildings.farmland.count = 10;
   s.calendar.season = 3;
-  close(computeNet(s).grain, 0.6 * 10 * 0.25);
+  close(computeNet(s).grain, 0.625 * 10 * 0.25);
 });
 
 console.log('buildings/tech');

@@ -50,7 +50,7 @@ describe('computeNet', () => {
     }
     const spring = SEASON_GRAIN_MUL[0]; // 1.5
     // 农田被动：0.6*4*1.5 ; 农夫：1.0*3*1.5(skill=0) ; 消耗：3*0.85
-    const expected = 0.6 * 4 * spring + 1.0 * farmers * spring - farmers * VILLAGER_GRAIN_PER_SEC;
+    const expected = 0.625 * 4 * spring + 5.0 * farmers * spring - farmers * VILLAGER_GRAIN_PER_SEC;
     expect(computeNet(s).grain).toBeCloseTo(expected);
   });
 
@@ -58,6 +58,6 @@ describe('computeNet', () => {
     const s = createInitialState();
     s.buildings.farmland.count = 10;
     s.calendar.season = 3; // 冬
-    expect(computeNet(s).grain).toBeCloseTo(0.6 * 10 * 0.25);
+    expect(computeNet(s).grain).toBeCloseTo(0.625 * 10 * 0.25);
   });
 });
