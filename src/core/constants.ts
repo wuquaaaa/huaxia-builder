@@ -4,7 +4,7 @@ export const DT = 1 / TICKS_PER_SECOND; // 每 tick 秒数
 
 export const VILLAGER_GRAIN_PER_SEC = 4.25; // 每位百姓每秒吃粮食
 export const BASE_MAX_POP = 0; // 初始人口上限，靠民居提供
-export const GROWTH_PER_SEC = 0.01; // 食物盈余时增长进度/秒
+export const GROWTH_PER_SEC = 0.05; // 食物盈余时增长进度/秒（Kittens 0.01/tick×5≈20s/人）
 export const SKILL_PER_SEC = 0.0005; // 在役技艺增速
 export const SKILL_MAX_BONUS = 1.0; // 技艺满级提供的额外产出倍率
 export const SKILL_CAP = 1.0; // 技艺数值上限
