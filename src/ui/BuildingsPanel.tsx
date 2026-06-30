@@ -2,8 +2,9 @@ import { useGame } from './useGame';
 import { BUILDINGS } from '../data/buildings.data';
 import { RESOURCE_MAP } from '../data/resources.data';
 import { canAfford, getPrice } from '../core/buildings';
-import { doBuild, gather } from '../store/gameStore';
+import { doBuild, gather, refineWood } from '../store/gameStore';
 import { fmt } from '../core/util';
+import { GRAIN_PER_WOOD } from '../core/constants';
 import type { ResourceId } from '../core/types';
 
 function priceText(price: Partial<Record<ResourceId, number>>): string {
@@ -19,9 +20,18 @@ export function BuildingsPanel() {
     <div className="panel">
       <h2>村落 · 营造</h2>
 
-      <button className="gather-btn" onClick={gather}>
-        🌾 采集粮食 <span className="gather-plus">+1</span>
-      </button>
+      <div className="gather-row">
+        <button className="gather-btn" onClick={gather}>
+          🌾 采集粮食 <span className="gather-plus">+1</span>
+        </button>
+        <button
+          className="gather-btn wood-btn"
+          disabled={state.resources.grain.amount < GRAIN_PER_WOOD}
+          onClick={refineWood}
+        >
+          🪓 伐木 <span className="gather-plus">耗{GRAIN_PER_WOOD}粮 +1木</span>
+        </button>
+      </div>
 
       <div className="build-list">
         {BUILDINGS.filter((b) => state.buildings[b.id].unlocked).map((b) => {

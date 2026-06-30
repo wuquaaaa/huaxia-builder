@@ -2,6 +2,8 @@ import {
   AUTOSAVE_INTERVAL_MS,
   EMIT_THROTTLE_MS,
   GATHER_GRAIN_PER_CLICK,
+  GRAIN_PER_WOOD,
+  REFINE_WOOD_PER_CLICK,
   TICKS_PER_SECOND,
   TICK_MS,
 } from '../core/constants';
@@ -100,6 +102,19 @@ export function gather(): void {
     state.resources.grain.amount + GATHER_GRAIN_PER_CLICK,
     0,
     cap,
+  );
+  notify();
+}
+
+/** 伐木：消耗粮食换木材，早期没有樵夫时的启动手段 */
+export function refineWood(): void {
+  if (state.resources.grain.amount < GRAIN_PER_WOOD) return;
+  const caps = computeCaps(state);
+  state.resources.grain.amount -= GRAIN_PER_WOOD;
+  state.resources.wood.amount = clamp(
+    state.resources.wood.amount + REFINE_WOOD_PER_CLICK,
+    0,
+    caps.wood,
   );
   notify();
 }
