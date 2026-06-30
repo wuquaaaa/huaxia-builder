@@ -1,64 +1,52 @@
 import { describe, it, expect } from 'vitest';
-import { createInitialState, CURRENT_VERSION } from '../src/core/state';
-import { save, load, exportSave, importSave, clearSave, migrate } from '../src/core/save';
+import { createInitialState } from '../src/core/state';
+import { serialize, deserialize, migrate } from '../src/core/save';
+import { newVillager } from '../src/core/population';
 
-describe('save', () => {
-  it('save/load round-trips correctly', () => {
+describe('存档往返', () => {
+  it('serialize→deserialize 后关键字段一致', () => {
     const s = createInitialState();
     s.resources.grain.amount = 1234;
-    s.buildings.farmland.count = 3;
-    s.calendar.day = 50;
-    s.calendar.season = 2;
-    s.calendar.year = 5;
-
-    save(s);
-    const loaded = load();
-
-    expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(CURRENT_VERSION);
-    expect(loaded!.resources.grain.amount).toBeCloseTo(1234, 0);
-    expect(loaded!.buildings.farmland.count).toBe(3);
-    expect(loaded!.calendar.year).toBe(5);
-    expect(loaded!.calendar.season).toBe(2);
-    expect(loaded!.calendar.day).toBe(50);
-
-    clearSave();
-  });
-
-  it('export/import round-trips', () => {
-    const s = createInitialState();
+    s.resources.wood.amount = 56;
+    s.buildings.farmland.count = 7;
     s.techs.calendar = true;
-    s.resources.wood.amount = 999;
+    s.calendar = { day: 33, season: 2, year: 5 };
+    const v = newVillager();
+    v.job = 'farmer';
+    v.skill = 0.4;
+    s.population.villagers.push(v);
 
-    const b64 = exportSave(s);
-    const imported = importSave(b64);
-    expect(imported).not.toBeNull();
-    expect(imported!.techs.calendar).toBe(true);
-    expect(imported!.resources.wood.amount).toBe(999);
+    const restored = deserialize(serialize(s))!;
+    expect(restored).not.toBeNull();
+    expect(restored.resources.grain.amount).toBeCloseTo(1234);
+    expect(restored.resources.wood.amount).toBeCloseTo(56);
+    expect(restored.buildings.farmland.count).toBe(7);
+    expect(restored.techs.calendar).toBe(true);
+    expect(restored.calendar).toEqual({ day: 33, season: 2, year: 5 });
+    expect(restored.population.villagers).toHaveLength(1);
+    expect(restored.population.villagers[0].job).toBe('farmer');
   });
+});
 
-  it('import rejects invalid data', () => {
-    expect(importSave('')).toBeNull();
-    expect(importSave('not-base64!!!')).toBeNull();
-    expect(importSave('eyJub3RfdmFsaWQiOiB0cnVlfQ==')).toBeNull(); // base64 of {"not_valid": true}
-  });
-
-  it('migrate adds missing fields', () => {
-    const old = {
-      version: 0,
-      lastTick: Date.now(),
-      resources: { grain: { amount: 100 }, wood: { amount: 0 }, minerals: { amount: 0 }, knowledge: { amount: 0 } },
-      buildings: { farmland: { count: 1, unlocked: true }, house: { count: 0, unlocked: true }, academy: { count: 0, unlocked: true }, granary: { count: 0, unlocked: true }, mine: { count: 0, unlocked: false } },
-      techs: { calendar: false, farming: false, mining: false },
-      population: { villagers: [], growthProgress: 0, starveTimer: 0 },
-      calendar: { day: 0, season: 0 as const, year: 0 },
-      log: [],
+describe('迁移', () => {
+  it('旧存档缺字段经 migrate 后补全且不报错', () => {
+    const partial: any = {
+      resources: { grain: { amount: 10 } }, // 缺 wood/minerals/knowledge
+      buildings: {}, // 缺全部
+      techs: {},
+      calendar: { day: 0, season: 0, year: 1 },
     };
-    const migrated = migrate(old as any);
-    expect(migrated.version).toBe(CURRENT_VERSION);
-    expect(migrated.trade).toBeDefined();
-    expect(migrated.religion).toBeDefined();
-    expect(migrated.paragon).toBeDefined();
-    expect(migrated.voyage).toBeDefined();
+    const s = migrate(partial);
+    expect(s.resources.wood).toEqual({ amount: 0 });
+    expect(s.resources.knowledge).toEqual({ amount: 0 });
+    expect(s.buildings.farmland).toBeDefined();
+    expect(s.buildings.mine.unlocked).toBe(false);
+    expect(s.techs.mining).toBe(false);
+    expect(s.population.villagers).toEqual([]);
+    expect(s.version).toBeGreaterThanOrEqual(1);
+  });
+
+  it('非法字符串返回 null', () => {
+    expect(deserialize('not-a-valid-save!!!')).toBeNull();
   });
 });

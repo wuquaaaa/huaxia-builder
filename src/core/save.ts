@@ -1,92 +1,83 @@
-import type { GameState } from './state';
-import { CURRENT_VERSION } from './state';
-
 import LZString from 'lz-string';
+import { CURRENT_VERSION, SAVE_KEY } from './constants';
+import { RESOURCE_IDS } from '../data/resources.data';
+import { BUILDINGS } from '../data/buildings.data';
+import { TECH_IDS } from '../data/techs.data';
+import { recomputeUnlocks } from './buildings';
+import { createInitialState } from './state';
+import type { GameState } from './types';
 
-const SAVE_KEY = 'huaxia_save';
+/** 版本迁移 + 字段补全，保证旧存档结构完整 */
+export function migrate(raw: any): GameState {
+  const init = createInitialState();
+  const s: GameState = { ...init, ...raw };
 
-export function save(state: GameState): string {
-  const json = JSON.stringify(state);
-  const compressed = LZString.compressToBase64(json);
-  localStorage.setItem(SAVE_KEY, compressed);
-  return compressed;
+  s.version = CURRENT_VERSION;
+
+  s.resources = { ...init.resources, ...(raw?.resources ?? {}) };
+  for (const id of RESOURCE_IDS) {
+    if (!s.resources[id]) s.resources[id] = { amount: 0 };
+  }
+
+  s.buildings = { ...init.buildings, ...(raw?.buildings ?? {}) };
+  for (const b of BUILDINGS) {
+    if (!s.buildings[b.id]) s.buildings[b.id] = { count: 0, unlocked: !b.requiresTech };
+  }
+
+  s.techs = { ...init.techs, ...(raw?.techs ?? {}) };
+  for (const id of TECH_IDS) {
+    if (s.techs[id] === undefined) s.techs[id] = false;
+  }
+
+  if (!s.population || !Array.isArray(s.population.villagers)) {
+    s.population = { villagers: [], growthProgress: 0 };
+  }
+  if (!s.calendar) s.calendar = init.calendar;
+  if (!Array.isArray(s.log)) s.log = [];
+  if (typeof s._starveTimer !== 'number') s._starveTimer = 0;
+  if (typeof s._dayProgress !== 'number') s._dayProgress = 0;
+  if (typeof s.lastTick !== 'number') s.lastTick = Date.now();
+
+  recomputeUnlocks(s);
+  return s;
 }
 
-export function load(): GameState | null {
+export function serialize(state: GameState): string {
+  return LZString.compressToBase64(JSON.stringify(state));
+}
+
+export function deserialize(str: string): GameState | null {
+  const json = LZString.decompressFromBase64(str);
+  if (!json) return null;
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) return null;
-    const json = LZString.decompressFromBase64(raw);
-    if (!json) return null;
-    let state = JSON.parse(json) as GameState;
-    state = migrate(state);
-    // 更新 lastTick 为当前时间（防止加载时再次离线结算）
-    state.lastTick = Date.now();
-    return state;
+    return migrate(JSON.parse(json));
   } catch {
     return null;
   }
 }
 
-export function exportSave(state: GameState): string {
-  const json = JSON.stringify(state);
-  return LZString.compressToBase64(json);
+export function saveGame(state: GameState): void {
+  try {
+    localStorage.setItem(SAVE_KEY, serialize(state));
+  } catch {
+    /* localStorage 不可用时静默忽略 */
+  }
 }
 
-export function importSave(base64: string): GameState | null {
+export function loadGame(): GameState | null {
   try {
-    if (!base64 || base64.trim() === '') return null;
-    const json = LZString.decompressFromBase64(base64.trim());
-    if (!json) return null;
-    const state = JSON.parse(json) as GameState;
-    if (!isValidState(state)) return null;
-    return migrate(state);
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return null;
+    return deserialize(raw);
   } catch {
     return null;
   }
 }
 
 export function clearSave(): void {
-  localStorage.removeItem(SAVE_KEY);
-}
-
-function isValidState(s: unknown): s is GameState {
-  if (!s || typeof s !== 'object') return false;
-  const state = s as Record<string, unknown>;
-  return (
-    typeof state.version === 'number' &&
-    typeof state.lastTick === 'number' &&
-    typeof state.resources === 'object' &&
-    typeof state.buildings === 'object' &&
-    typeof state.techs === 'object' &&
-    typeof state.population === 'object' &&
-    typeof state.calendar === 'object'
-  );
-}
-
-// ── Version migration ──
-const migrations: Record<number, (s: GameState) => GameState> = {
-  // 版本 0→1：初始版本，无需迁移
-};
-
-export function migrate(s: GameState): GameState {
-  let state: GameState = { ...s, resources: deepClone(s.resources), buildings: deepClone(s.buildings) };
-  // 补全缺失的预留字段
-  if (!('trade' in state)) (state as any).trade = {};
-  if (!('religion' in state)) (state as any).religion = {};
-  if (!('paragon' in state)) (state as any).paragon = {};
-  if (!('voyage' in state)) (state as any).voyage = {};
-  if (!('log' in state)) (state as any).log = [];
-  while (state.version < CURRENT_VERSION) {
-    const migrator = migrations[state.version];
-    if (migrator) {
-      state = migrator(state);
-    }
-    state.version += 1;
+  try {
+    localStorage.removeItem(SAVE_KEY);
+  } catch {
+    /* ignore */
   }
-  return state;
-}
-
-function deepClone<T>(obj: T): T {
-  return JSON.parse(JSON.stringify(obj));
 }

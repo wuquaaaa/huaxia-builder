@@ -1,110 +1,83 @@
-import type { GameState, ResourceId, JobId } from './state';
-import { SKILL_MAX_BONUS, VILLAGER_GRAIN_PER_SEC } from './state';
-import { RESOURCES } from '../data/resources.data';
+import { VILLAGER_GRAIN_PER_SEC, SKILL_CAP, SKILL_MAX_BONUS } from './constants';
+import { RESOURCES, RESOURCE_IDS } from '../data/resources.data';
 import { BUILDINGS } from '../data/buildings.data';
-import { JOBS } from '../data/jobs.data';
-import { SEASONS } from '../data/seasons.data';
+import { JOB_MAP } from '../data/jobs.data';
 import { TECHS } from '../data/techs.data';
+import { SEASON_GRAIN_MUL } from '../data/seasons.data';
+import type { GameState, MultiplierTarget, ResourceId } from './types';
 
-export function computeCaps(state: GameState): Record<ResourceId, number> {
-  const caps: Record<string, number> = {};
-  for (const rId of Object.keys(RESOURCES) as ResourceId[]) {
-    let cap = RESOURCES[rId].baseCap;
-    for (const bId of Object.keys(BUILDINGS) as (keyof typeof BUILDINGS)[]) {
-      const b = BUILDINGS[bId];
-      const count = state.buildings[bId].count;
-      if (b.capBonus?.[rId]) {
-        cap += b.capBonus[rId]! * count;
-      }
+/** 季节对某资源的产量乘子（目前仅粮食受影响） */
+export function seasonMulFor(res: ResourceId, state: GameState): number {
+  if (res === 'grain') return SEASON_GRAIN_MUL[state.calendar.season];
+  return 1;
+}
+
+/**
+ * 统一乘算入口：遍历建筑与已研习学问，收集 target 匹配的 factor。
+ * 加法叠加：1 + Σ(factor * count)（建筑按数量，学问按 1 次）。
+ */
+export function getMultiplier(target: MultiplierTarget, state: GameState): number {
+  let m = 1;
+  for (const b of BUILDINGS) {
+    const cnt = state.buildings[b.id].count;
+    if (!cnt || !b.multipliers) continue;
+    for (const mul of b.multipliers) {
+      if (mul.target === target) m += mul.factor * cnt;
     }
-    caps[rId] = Math.max(0, cap);
+  }
+  for (const t of TECHS) {
+    if (!state.techs[t.id] || !t.multipliers) continue;
+    for (const mul of t.multipliers) {
+      if (mul.target === target) m += mul.factor;
+    }
+  }
+  return m;
+}
+
+/** 各资源仓廪上限（派生值，每帧计算） */
+export function computeCaps(state: GameState): Record<ResourceId, number> {
+  const caps = {} as Record<ResourceId, number>;
+  for (const r of RESOURCES) caps[r.id] = r.baseCap;
+  for (const b of BUILDINGS) {
+    const cnt = state.buildings[b.id].count;
+    if (!cnt || !b.capBonus) continue;
+    for (const [res, val] of Object.entries(b.capBonus) as [ResourceId, number][]) {
+      caps[res] += val * cnt;
+    }
   }
   return caps;
 }
 
+/** 各资源每秒净产出（含建筑被动、工役产出、百姓消耗与所有乘算修正） */
 export function computeNet(state: GameState): Record<ResourceId, number> {
-  const net: Record<string, number> = {};
-  const resIds = Object.keys(RESOURCES) as ResourceId[];
-  for (const r of resIds) net[r] = 0;
-
-  const season = SEASONS[state.calendar.season];
+  const net = {} as Record<ResourceId, number>;
+  for (const id of RESOURCE_IDS) net[id] = 0;
 
   // 建筑被动产出
-  for (const bId of Object.keys(BUILDINGS) as (keyof typeof BUILDINGS)[]) {
-    const bConf = BUILDINGS[bId];
-    const count = state.buildings[bId].count;
-    if (count <= 0 || !bConf.produces) continue;
-    for (const rId of resIds) {
-      const base = bConf.produces[rId];
-      if (base === undefined) continue;
-      let mul = 1;
-      if (bConf.affectedBySeason?.includes(rId)) {
-        mul *= season.grainMul;
-      }
-      net[rId]! += base * count * mul;
+  for (const b of BUILDINGS) {
+    const cnt = state.buildings[b.id].count;
+    if (!cnt || !b.produces) continue;
+    for (const [resStr, val] of Object.entries(b.produces) as [ResourceId, number][]) {
+      const res = resStr;
+      const sMul = b.affectedBySeason?.includes(res) ? seasonMulFor(res, state) : 1;
+      net[res] += val * cnt * sMul * getMultiplier(b.id, state) * getMultiplier(res, state);
     }
   }
 
   // 工役产出
   for (const v of state.population.villagers) {
     if (!v.job) continue;
-    const jConf = JOBS[v.job];
-    // 检查工役是否已解锁
-    if (jConf.requiresTech && !state.techs[jConf.requiresTech]) continue;
-    for (const rId of resIds) {
-      const base = jConf.produces[rId];
-      if (base === undefined) continue;
-
-      // 技艺加成（加法，上限 +100%）
-      const skillMul = 1 + Math.min(v.skill, 1) * SKILL_MAX_BONUS;
-
-      // 季节
-      let seasonMul = 1;
-      if (jConf.affectedBySeason?.includes(rId)) {
-        seasonMul = season.grainMul;
-      }
-
-      // 科技加成
-      let techMul = 1;
-      if (rId === 'grain' && state.techs.farming) {
-        // 农耕：农夫 +50%
-        if (v.job === 'farmer') techMul = 1.5;
-      }
-
-      // 建筑乘算（加法叠加）
-      const buildMul = getMultiplier(v.job, state);
-
-      const contribution = base * skillMul * seasonMul * techMul * buildMul;
-      net[rId]! += contribution;
+    const job = JOB_MAP[v.job];
+    const skillMul = 1 + Math.min(v.skill, SKILL_CAP) * SKILL_MAX_BONUS;
+    for (const [resStr, val] of Object.entries(job.produces) as [ResourceId, number][]) {
+      const res = resStr;
+      const sMul = job.affectedBySeason?.includes(res) ? seasonMulFor(res, state) : 1;
+      net[res] += val * skillMul * sMul * getMultiplier(job.id, state) * getMultiplier(res, state);
     }
   }
 
-  // 农耕科技对农田被动产出的额外加成（耕农田+50%）
-  if (state.techs.farming) {
-    const farmland = state.buildings.farmland;
-    if (farmland.count > 0) {
-      const base = BUILDINGS.farmland.produces!.grain! * farmland.count;
-      const addMul = season.grainMul * 1.5 - season.grainMul; // 增量部分
-      net.grain! += base * (addMul / season.grainMul) * 0.5;
-    }
-  }
-
-  // 百姓粮食消耗
-  const grainConsumption = state.population.villagers.length * VILLAGER_GRAIN_PER_SEC;
-  net.grain! -= grainConsumption;
+  // 百姓消耗粮食
+  net.grain -= state.population.villagers.length * VILLAGER_GRAIN_PER_SEC;
 
   return net;
-}
-
-export function getMultiplier(target: ResourceId | JobId, state: GameState): number {
-  let total = 1;
-  for (const bId of Object.keys(BUILDINGS) as (keyof typeof BUILDINGS)[]) {
-    const b = BUILDINGS[bId];
-    const count = state.buildings[bId].count;
-    if (count <= 0 || !b.multipliers) continue;
-    if (b.multipliers.target === target) {
-      total += b.multipliers.factor * count;
-    }
-  }
-  return total;
 }

@@ -1,147 +1,167 @@
-import type { GameState, ResourceId, LogEntry } from '../core/state';
+import {
+  AUTOSAVE_INTERVAL_MS,
+  EMIT_THROTTLE_MS,
+  GATHER_GRAIN_PER_CLICK,
+  TICKS_PER_SECOND,
+  TICK_MS,
+} from '../core/constants';
 import { createInitialState } from '../core/state';
 import { runTick } from '../core/engine';
-import { save, load, importSave, exportSave, clearSave } from '../core/save';
-import { applyOfflineProgress } from '../core/offline';
-import { computeNet, computeCaps } from '../core/resources';
-import { getPrice, canAfford, canAffordN, build } from '../core/buildings';
-import { canResearch, getAvailableTechs, research } from '../core/tech';
-import { gather, setVillagerJob } from './actions';
+import { build as buildCore } from '../core/buildings';
+import { research as researchCore } from '../core/tech';
+import { computeCaps } from '../core/resources';
+import { newVillager } from '../core/population';
+import { settleOffline } from '../core/offline';
+import { loadGame, saveGame, clearSave, serialize, deserialize } from '../core/save';
+import { pushLog } from '../core/log';
+import { clamp, formatDuration, fmt } from '../core/util';
+import { RESOURCE_MAP } from '../data/resources.data';
+import type { BuildingId, GameState, JobId, TechId } from '../core/types';
 
-export type { ResourceId };
+// ---- 单一全局状态 ----
+let state: GameState = loadGame() ?? createInitialState();
 
-// ── Subscription store ──
-type Listener = () => void;
+// 离线结算（仅对已有进度的存档有意义）
+const offline = settleOffline(state);
+if (offline) {
+  const parts = (Object.keys(offline.gained) as (keyof typeof offline.gained)[])
+    .filter((k) => Math.abs(offline.gained[k]) >= 0.1)
+    .map((k) => `${RESOURCE_MAP[k].name} ${offline.gained[k] >= 0 ? '+' : ''}${fmt(offline.gained[k])}`);
+  pushLog(
+    state,
+    'event',
+    `你离开了 ${formatDuration(offline.gapSec)}，村落收获：${parts.length ? parts.join('，') : '无明显变化'}`,
+  );
+}
 
-class GameStore {
-  private state: GameState;
-  private listeners = new Set<Listener>();
-  private rafId: number | null = null;
-  private lastSnapshot = 0;
-  private snapshotInterval = 100; // ms
-  private version = 0; // for getSnapshot to return new reference
+// ---- 订阅机制（useSyncExternalStore） ----
+const listeners = new Set<() => void>();
+let version = 0;
+let lastEmit = 0;
 
-  constructor() {
-    const saved = load();
-    if (saved) {
-      this.state = saved;
-      const offlineLog = applyOfflineProgress(this.state);
-      if (offlineLog) {
-        this.state.log.push(offlineLog);
-      }
-    } else {
-      this.state = createInitialState();
-    }
-    this.version++;
-    this.startLoop();
-    // Auto-save
-    setInterval(() => save(this.state), 30000);
-    window.addEventListener('visibilitychange', () => {
-      if (document.hidden) save(this.state);
+function notify(): void {
+  version++;
+  listeners.forEach((l) => l());
+}
+
+/** tick 循环产生的变更：节流通知，避免每帧重渲染 */
+function emitThrottled(): void {
+  const now = performance.now();
+  if (now - lastEmit < EMIT_THROTTLE_MS) return;
+  lastEmit = now;
+  notify();
+}
+
+export function subscribe(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+
+export function getVersion(): number {
+  return version;
+}
+
+export function getState(): GameState {
+  return state;
+}
+
+// ---- 游戏主循环 ----
+let rafId = 0;
+function frame(): void {
+  const now = Date.now();
+  const elapsed = now - state.lastTick;
+  const ticks = Math.floor(elapsed / TICK_MS);
+  if (ticks > 0) {
+    for (let i = 0; i < ticks; i++) runTick(state, 1 / TICKS_PER_SECOND);
+    state.lastTick += ticks * TICK_MS;
+    emitThrottled();
+  }
+  rafId = requestAnimationFrame(frame);
+}
+
+export function startLoop(): void {
+  if (rafId) return;
+  rafId = requestAnimationFrame(frame);
+
+  // 自动存档
+  setInterval(() => saveGame(state), AUTOSAVE_INTERVAL_MS);
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') saveGame(state);
     });
-  }
-
-  getState(): GameState {
-    return this.state;
-  }
-
-  // Game actions
-  gather(): LogEntry[] {
-    const results = gather(this.state);
-    this.notify();
-    return results;
-  }
-
-  buildBuilding(bId: string, count: number): LogEntry[] {
-    const logs = build(bId as any, count, this.state);
-    this.notify();
-    return logs;
-  }
-
-  setJob(vIndex: number, job: string | null): void {
-    setVillagerJob(this.state, vIndex, job as any);
-    this.notify();
-  }
-
-  researchTech(tId: string): LogEntry | null {
-    if (!canResearch(tId as any, this.state)) return null;
-    const log = research(tId as any, this.state);
-    this.notify();
-    return log;
-  }
-
-  importSave(base64: string): boolean {
-    const imported = importSave(base64);
-    if (!imported) return false;
-    this.state = imported;
-    this.notify();
-    return true;
-  }
-
-  exportSave(): string {
-    return exportSave(this.state);
-  }
-
-  clearSave(): void {
-    clearSave();
-    this.state = createInitialState();
-    this.notify();
-  }
-
-  // ── Computed queries ──
-  getNet() { return computeNet(this.state); }
-  getCaps() { return computeCaps(this.state); }
-  getPrice(bId: string) { return getPrice(bId as any, this.state); }
-  canAfford(bId: string) { return canAfford(bId as any, this.state); }
-  canAffordN(bId: string, n: number) { return canAffordN(bId as any, n, this.state); }
-  canResearch(tId: string) { return canResearch(tId as any, this.state); }
-  getAvailableTechs() { return getAvailableTechs(this.state); }
-
-  // ── Store subscription ──
-  subscribe(listener: Listener): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  getSnapshot(): number {
-    return this.version; // version counter, always changes on state mutation
-  }
-
-  getRawState(): GameState {
-    return this.state;
-  }
-
-  private notify(): void {
-    this.version++;
-    for (const l of this.listeners) l();
-  }
-
-  private startLoop(): void {
-    let lastNotify = Date.now();
-    const loop = () => {
-      const now = Date.now();
-      const elapsed = now - this.state.lastTick;
-
-      // Run ticks based on time since lastTick
-      const tickMs = 1000 / 5; // TICKS_PER_SECOND = 5
-      const ticksToRun = Math.floor(elapsed / tickMs);
-      if (ticksToRun > 0) {
-        for (let i = 0; i < ticksToRun; i++) {
-          runTick(this.state);
-        }
-        this.state.lastTick += ticksToRun * tickMs;
-        this.version++;
-
-        // Throttled UI notify
-        if (now - lastNotify >= this.snapshotInterval) {
-          lastNotify = now;
-          for (const l of this.listeners) l();
-        }
-      }
-      this.rafId = requestAnimationFrame(loop);
-    };
-    this.rafId = requestAnimationFrame(loop);
+    window.addEventListener('beforeunload', () => saveGame(state));
   }
 }
 
-export const store = new GameStore();
+// ---- 玩家动作（动作后立即 notify 以保证 UI 即时响应） ----
+export function gather(): void {
+  const cap = computeCaps(state).grain;
+  state.resources.grain.amount = clamp(
+    state.resources.grain.amount + GATHER_GRAIN_PER_CLICK,
+    0,
+    cap,
+  );
+  notify();
+}
+
+export function doBuild(id: BuildingId): void {
+  if (buildCore(state, id)) notify();
+}
+
+export function doResearch(id: TechId): void {
+  if (researchCore(state, id)) notify();
+}
+
+/** 把一位白身百姓指派到某工役 */
+export function assignJob(job: JobId): void {
+  const idle = state.population.villagers.find((v) => v.job === null);
+  if (!idle) return;
+  idle.job = job;
+  notify();
+}
+
+/** 从某工役撤回一位百姓（变回白身） */
+export function unassignJob(job: JobId): void {
+  // 撤回技艺最低者，保留熟练工
+  const workers = state.population.villagers.filter((v) => v.job === job);
+  if (workers.length === 0) return;
+  let lowest = workers[0];
+  for (const w of workers) if (w.skill < lowest.skill) lowest = w;
+  lowest.job = null;
+  notify();
+}
+
+export function jobCount(job: JobId): number {
+  return state.population.villagers.filter((v) => v.job === job).length;
+}
+
+export function idleCount(): number {
+  return state.population.villagers.filter((v) => v.job === null).length;
+}
+
+// ---- 存档导入/导出/重置 ----
+export function exportSave(): string {
+  return serialize(state);
+}
+
+export function importSave(str: string): boolean {
+  const loaded = deserialize(str.trim());
+  if (!loaded) return false;
+  state = loaded;
+  saveGame(state);
+  notify();
+  return true;
+}
+
+export function resetGame(): void {
+  clearSave();
+  state = createInitialState();
+  pushLog(state, 'info', '开创新朝，一切从头开始。');
+  notify();
+}
+
+// 调试用：加一位百姓（不在正式 UI 暴露）
+export function _debugAddVillager(): void {
+  state.population.villagers.push(newVillager());
+  notify();
+}

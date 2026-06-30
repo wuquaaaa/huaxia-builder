@@ -1,16 +1,4 @@
-export type SeasonId = 0 | 1 | 2 | 3;
-
-export interface SeasonConfig {
-  name: string;
-  grainMul: number;
-}
-
-export const SEASONS: Record<SeasonId, SeasonConfig> = {
-  0: { name: '春', grainMul: 1.5 },
-  1: { name: '夏', grainMul: 1.0 },
-  2: { name: '秋', grainMul: 1.0 },
-  3: { name: '冬', grainMul: 0.25 },
-};
-
-export const DAYS_PER_SEASON = 100;
-export const DAY_LENGTH_MS = 2000; // 2 real seconds per in-game day
+export const SEASON_NAMES = ['春', '夏', '秋', '冬'];
+export const SEASON_ICONS = ['🌱', '☀️', '🍂', '❄️'];
+// 粮食产量季节乘子，顺序对应 0春 1夏 2秋 3冬
+export const SEASON_GRAIN_MUL = [1.5, 1.0, 1.0, 0.25];

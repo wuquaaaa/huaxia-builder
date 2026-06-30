@@ -1,77 +1,90 @@
 import { describe, it, expect } from 'vitest';
-import { createInitialState, GROWTH_PER_SEC, STARVE_INTERVAL, VILLAGER_GRAIN_PER_SEC } from '../src/core/state';
+import { createInitialState } from '../src/core/state';
+import { maxPop, newVillager, updatePopulation } from '../src/core/population';
+import { computeNet } from '../src/core/resources';
 import { runTick } from '../src/core/engine';
+import {
+  GROWTH_PER_SEC,
+  SKILL_CAP,
+  STARVE_INTERVAL,
+  TICKS_PER_SECOND,
+} from '../src/core/constants';
 
-describe('population', () => {
-  it('grows when grain net >= 0 and villager count < maxPop', () => {
+describe('maxPop', () => {
+  it('民居每座提供 2 人上限', () => {
     const s = createInitialState();
-    s.buildings.house.count = 1; // maxPop = 2
-    s.resources.grain.amount = 1000;
-    s.population.villagers.push({ name: '农夫', job: 'farmer', skill: 0 });
-    s.lastTick = Date.now();
-
-    // Run enough ticks for 1/GROWTH_PER_SEC = 100 seconds
-    const ticks = Math.ceil((1 / GROWTH_PER_SEC) * 5);
-    for (let i = 0; i < ticks; i++) {
-      runTick(s);
-    }
-    expect(s.population.villagers.length).toBeGreaterThanOrEqual(2);
+    s.buildings.house.count = 5;
+    expect(maxPop(s)).toBe(10);
   });
+});
 
-  it('does not grow in winter when net grain < 0', () => {
+describe('人口增长', () => {
+  it('净产≥0 且有粮未满员 → 经过 1/GROWTH 秒恰好 +1 人', () => {
     const s = createInitialState();
-    s.calendar.season = 3; // winter, grainMul = 0.25
-    s.buildings.house.count = 1;
-    s.resources.grain.amount = 10;
-    s.population.villagers.push({ name: '农夫', job: 'farmer', skill: 0 });
-    s.lastTick = Date.now();
-
-    const ticks = 50;
-    for (let i = 0; i < ticks; i++) {
-      runTick(s);
+    s.buildings.house.count = 5; // 上限 10
+    s.buildings.farmland.count = 50; // 大量粮食保证净产>0
+    s.resources.grain.amount = 100;
+    const dt = 1 / TICKS_PER_SECOND;
+    const ticksNeeded = Math.ceil(1 / (GROWTH_PER_SEC * dt));
+    for (let i = 0; i < ticksNeeded; i++) {
+      const net = computeNet(s);
+      updatePopulation(s, dt, net);
     }
-    // In winter, farmer produces 1.0*0.25=0.25, consumes 0.85 → net negative
-    // Growth should not happen
     expect(s.population.villagers.length).toBe(1);
   });
 
-  it('starves when grain=0 and net < 0', () => {
+  it('满员后不再增长', () => {
     const s = createInitialState();
-    s.calendar.season = 3; // winter
+    s.buildings.house.count = 1; // 上限 2
+    s.buildings.farmland.count = 50;
+    s.resources.grain.amount = 100;
+    for (let i = 0; i < 5000; i++) {
+      const net = computeNet(s);
+      updatePopulation(s, 1 / TICKS_PER_SECOND, net);
+    }
+    expect(s.population.villagers.length).toBe(2);
+  });
+});
+
+describe('饥荒', () => {
+  it('粮尽且净产<0 → STARVE_INTERVAL 后 -1 人', () => {
+    const s = createInitialState();
+    // 2 名白身，无农田无粮 → 净产为负
+    s.population.villagers.push(newVillager(), newVillager());
     s.resources.grain.amount = 0;
-    s.population.villagers.push({ name: '饥民', job: null, skill: 0 });
-    s.lastTick = Date.now();
-
-    // Run STARVE_INTERVAL worth of ticks
-    const ticks = STARVE_INTERVAL * 5 + 5;
+    const dt = 1 / TICKS_PER_SECOND;
+    const ticks = Math.ceil(STARVE_INTERVAL / dt);
     for (let i = 0; i < ticks; i++) {
-      runTick(s);
+      const net = computeNet(s);
+      updatePopulation(s, dt, net);
     }
-    expect(s.population.villagers.length).toBe(0);
+    expect(s.population.villagers.length).toBe(1);
   });
+});
 
-  it('skill increases while on job', () => {
+describe('技艺', () => {
+  it('在役技艺随时间增长并封顶于 SKILL_CAP', () => {
     const s = createInitialState();
-    s.resources.grain.amount = 1000;
-    s.population.villagers.push({ name: '勤奋', job: 'woodcutter', skill: 0 });
-    s.lastTick = Date.now();
-
-    // Run 100 ticks = 20 seconds
-    for (let i = 0; i < 100; i++) {
-      runTick(s);
+    const v = newVillager();
+    v.job = 'farmer';
+    s.population.villagers.push(v);
+    s.buildings.farmland.count = 100;
+    s.resources.grain.amount = 100;
+    for (let i = 0; i < 100000; i++) {
+      updatePopulation(s, 1 / TICKS_PER_SECOND, computeNet(s));
     }
-    expect(s.population.villagers[0].skill).toBeGreaterThan(0);
+    expect(v.skill).toBeCloseTo(SKILL_CAP);
+    expect(v.skill).toBeLessThanOrEqual(SKILL_CAP);
   });
+});
 
-  it('idle villager does not gain skill', () => {
+describe('runTick 集成', () => {
+  it('资源不会超过上限', () => {
     const s = createInitialState();
-    s.resources.grain.amount = 1000;
-    s.population.villagers.push({ name: '闲人', job: null, skill: 0 });
-    s.lastTick = Date.now();
-
-    for (let i = 0; i < 100; i++) {
-      runTick(s);
-    }
-    expect(s.population.villagers[0].skill).toBe(0);
+    s.buildings.farmland.count = 1000;
+    s.resources.grain.amount = 4999;
+    for (let i = 0; i < 100; i++) runTick(s, 1 / TICKS_PER_SECOND);
+    expect(s.resources.grain.amount).toBeLessThanOrEqual(5000);
+    expect(s.resources.grain.amount).toBeGreaterThanOrEqual(0);
   });
 });

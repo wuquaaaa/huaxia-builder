@@ -1,47 +1,33 @@
-import type { GameState, TechId, LogEntry } from './state';
-import { TECHS } from '../data/techs.data';
-import { BUILDINGS } from '../data/buildings.data';
-import { JOBS } from '../data/jobs.data';
+import { TECH_MAP } from '../data/techs.data';
+import { recomputeUnlocks } from './buildings';
+import { pushLog } from './log';
+import type { GameState, ResourceId, TechId } from './types';
 
-export function canResearch(tId: TechId, state: GameState): boolean {
-  if (state.techs[tId]) return false; // 已研究
-  const tech = TECHS[tId];
-  // 检查前置
-  if (tech.requires) {
-    for (const req of tech.requires) {
-      if (!state.techs[req]) return false;
-    }
-  }
-  // 检查成本
-  for (const [res, cost] of Object.entries(tech.cost)) {
-    const amount = state.resources[res as keyof typeof state.resources].amount;
-    if (amount < cost) return false;
-  }
+export function canResearch(state: GameState, id: TechId): boolean {
+  if (state.techs[id]) return false;
+  const t = TECH_MAP[id];
+  if (t.requires && !t.requires.every((r) => state.techs[r])) return false;
+  return (Object.entries(t.cost) as [ResourceId, number][]).every(
+    ([res, v]) => state.resources[res].amount >= v,
+  );
+}
+
+/** 前置已满足、但资源不一定够（用于 UI 是否显示该学问） */
+export function isVisible(state: GameState, id: TechId): boolean {
+  if (state.techs[id]) return false;
+  const t = TECH_MAP[id];
+  if (t.requires && !t.requires.every((r) => state.techs[r])) return false;
   return true;
 }
 
-export function getAvailableTechs(state: GameState): TechId[] {
-  return (Object.keys(TECHS) as TechId[]).filter(id => canResearch(id, state));
-}
-
-export function research(tId: TechId, state: GameState): LogEntry {
-  const tech = TECHS[tId];
-  // 扣费
-  for (const [res, cost] of Object.entries(tech.cost)) {
-    state.resources[res as keyof typeof state.resources].amount -= cost;
+export function research(state: GameState, id: TechId): boolean {
+  if (!canResearch(state, id)) return false;
+  const t = TECH_MAP[id];
+  for (const [res, v] of Object.entries(t.cost) as [ResourceId, number][]) {
+    state.resources[res].amount -= v;
   }
-  state.techs[tId] = true;
-
-  // 解锁建筑
-  if (tech.unlocksBuildings) {
-    for (const bId of tech.unlocksBuildings) {
-      state.buildings[bId].unlocked = true;
-    }
-  }
-
-  return {
-    ts: Date.now(),
-    type: 'event',
-    text: `研习完成：${tech.name}——${tech.description}`,
-  };
+  state.techs[id] = true;
+  recomputeUnlocks(state);
+  pushLog(state, 'event', `习得新学问：${t.name}`);
+  return true;
 }

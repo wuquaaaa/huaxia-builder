@@ -1,3 +1,8 @@
 node_modules/
 dist/
 *.local
+.npm-cache/
+.DS_Store
+
+# 参考用的 Kittens Game 源码副本，不纳入本仓库
+kittensgame-master/

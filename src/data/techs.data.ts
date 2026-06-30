@@ -1,30 +1,35 @@
-import type { TechId, TechConfig } from '../core/state';
+import type { TechConfig, TechId } from '../core/types';
 
-export const TECHS: Record<TechId, TechConfig> = {
-  calendar: {
+export const TECHS: TechConfig[] = [
+  {
     id: 'calendar',
     name: '历法',
     cost: { knowledge: 30 },
-    unlocksBuildings: [],
-    unlocksJobs: [],
-    description: '观天象而知时节——显示节气天数，可预知换季，规划备荒。',
+    description: '推演节气，显示季节天数并可预知换季，便于过冬备荒。',
   },
-  farming: {
+  {
     id: 'farming',
     name: '农耕',
     cost: { knowledge: 100 },
     requires: ['calendar'],
-    unlocksBuildings: [],
-    unlocksJobs: [],
-    description: '深耕细作——农夫产量 +50%、农田产量 +50%。粮食从此丰足。',
+    multipliers: [
+      { target: 'farmer', factor: 0.5 },
+      { target: 'farmland', factor: 0.5 },
+    ],
+    description: '农夫与农田产量 +50%。',
   },
-  mining: {
+  {
     id: 'mining',
     name: '采矿',
     cost: { knowledge: 100 },
     requires: ['calendar'],
     unlocksBuildings: ['mine'],
     unlocksJobs: ['miner'],
-    description: '凿山取矿——解锁矿工工役与矿场建筑，开启矿石资源链。',
+    description: '解锁矿工工役与矿场建筑，开启矿石产业链。',
   },
-};
+];
+
+export const TECH_IDS = TECHS.map((t) => t.id) as TechId[];
+export const TECH_MAP = Object.fromEntries(
+  TECHS.map((t) => [t.id, t]),
+) as Record<TechId, TechConfig>;

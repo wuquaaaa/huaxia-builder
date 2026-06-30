@@ -1,36 +1,20 @@
-import React, { useEffect, useRef } from 'react';
-import type { LogEntry } from '../core/state';
+import { useGame } from './useGame';
 
-interface LogPanelProps {
-  logs: LogEntry[];
-}
-
-const LogPanel: React.FC<LogPanelProps> = ({ logs }) => {
-  const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs.length]);
+export function LogPanel() {
+  const state = useGame();
+  const entries = state.log.slice().reverse();
 
   return (
-    <div style={{
-      padding: 10,
-      maxHeight: 200,
-      overflowY: 'auto',
-      borderTop: '1px solid #0f3460',
-      fontSize: 12,
-    }}>
-      {logs.slice(-30).map((l, i) => (
-        <div key={i} style={{
-          padding: '2px 0',
-          color: l.type === 'warn' ? '#e74c3c' : l.type === 'event' ? '#f1c40f' : '#888',
-        }}>
-          {l.text}
-        </div>
-      ))}
-      <div ref={bottomRef} />
+    <div className="log-panel">
+      <h3>纪事</h3>
+      <div className="log-list">
+        {entries.length === 0 && <div className="log-empty">村落初创，万象待兴……</div>}
+        {entries.map((e, i) => (
+          <div className={'log-entry ' + e.type} key={entries.length - i}>
+            {e.text}
+          </div>
+        ))}
+      </div>
     </div>
   );
-};
-
-export default LogPanel;
+}

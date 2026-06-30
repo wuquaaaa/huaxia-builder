@@ -1,23 +1,22 @@
-import type { GameState, LogEntry } from './state';
-import { SEASONS, DAYS_PER_SEASON, DAY_LENGTH_MS, type SeasonId } from '../data/seasons.data';
+import { DAY_LENGTH_MS, DAYS_PER_SEASON } from './constants';
+import { SEASON_NAMES } from '../data/seasons.data';
+import { pushLog } from './log';
+import type { GameState } from './types';
 
-export function advanceCalendar(state: GameState, dt: number): LogEntry[] {
-  const logs: LogEntry[] = [];
-  const cal = state.calendar;
-
-  // dt 是秒，转换为游戏天数
-  const dayFrac = dt * (1000 / DAY_LENGTH_MS);
-  cal.day += dayFrac;
-
-  while (cal.day >= DAYS_PER_SEASON) {
-    cal.day -= DAYS_PER_SEASON;
-    cal.season = ((cal.season + 1) % 4) as SeasonId;
-    if (cal.season === 0) {
-      cal.year += 1;
-      logs.push({ ts: Date.now(), type: 'event', text: `新的一年：第 ${cal.year} 年` });
+export function advanceCalendar(state: GameState, dt: number): void {
+  const c = state.calendar;
+  state._dayProgress += (dt * 1000) / DAY_LENGTH_MS;
+  while (state._dayProgress >= 1) {
+    state._dayProgress -= 1;
+    c.day += 1;
+    if (c.day >= DAYS_PER_SEASON) {
+      c.day = 0;
+      c.season = ((c.season + 1) % 4) as 0 | 1 | 2 | 3;
+      if (c.season === 0) {
+        c.year += 1;
+        pushLog(state, 'event', `新的一年：第 ${c.year} 年`);
+      }
+      pushLog(state, 'event', `时节更替：${SEASON_NAMES[c.season]}`);
     }
-    logs.push({ ts: Date.now(), type: 'info', text: `时节更替：${SEASONS[cal.season].name}（粮食倍率 ×${SEASONS[cal.season].grainMul}）` });
   }
-
-  return logs;
 }
