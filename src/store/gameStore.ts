@@ -1,6 +1,6 @@
 import type { GameState, ResourceId, LogEntry } from '../core/state';
 import { createInitialState } from '../core/state';
-import { runTicks } from '../core/engine';
+import { runTick } from '../core/engine';
 import { save, load, importSave, exportSave, clearSave } from '../core/save';
 import { applyOfflineProgress } from '../core/offline';
 import { computeNet, computeCaps } from '../core/resources';
@@ -19,12 +19,12 @@ class GameStore {
   private rafId: number | null = null;
   private lastSnapshot = 0;
   private snapshotInterval = 100; // ms
+  private version = 0; // for getSnapshot to return new reference
 
   constructor() {
     const saved = load();
     if (saved) {
       this.state = saved;
-      // 离线结算
       const offlineLog = applyOfflineProgress(this.state);
       if (offlineLog) {
         this.state.log.push(offlineLog);
@@ -32,7 +32,7 @@ class GameStore {
     } else {
       this.state = createInitialState();
     }
-    // Start game loop
+    this.version++;
     this.startLoop();
     // Auto-save
     setInterval(() => save(this.state), 30000);
@@ -48,25 +48,25 @@ class GameStore {
   // Game actions
   gather(): LogEntry[] {
     const results = gather(this.state);
-    this.emit();
+    this.notify();
     return results;
   }
 
   buildBuilding(bId: string, count: number): LogEntry[] {
     const logs = build(bId as any, count, this.state);
-    this.emit();
+    this.notify();
     return logs;
   }
 
   setJob(vIndex: number, job: string | null): void {
     setVillagerJob(this.state, vIndex, job as any);
-    this.emit();
+    this.notify();
   }
 
   researchTech(tId: string): LogEntry | null {
     if (!canResearch(tId as any, this.state)) return null;
     const log = research(tId as any, this.state);
-    this.emit();
+    this.notify();
     return log;
   }
 
@@ -74,7 +74,7 @@ class GameStore {
     const imported = importSave(base64);
     if (!imported) return false;
     this.state = imported;
-    this.emit();
+    this.notify();
     return true;
   }
 
@@ -85,7 +85,7 @@ class GameStore {
   clearSave(): void {
     clearSave();
     this.state = createInitialState();
-    this.emit();
+    this.notify();
   }
 
   // ── Computed queries ──
@@ -103,33 +103,40 @@ class GameStore {
     return () => this.listeners.delete(listener);
   }
 
-  getSnapshot(): GameState {
+  getSnapshot(): number {
+    return this.version; // version counter, always changes on state mutation
+  }
+
+  getRawState(): GameState {
     return this.state;
   }
 
-  private emit(): void {
-    const now = Date.now();
-    if (now - this.lastSnapshot >= this.snapshotInterval) {
-      this.lastSnapshot = now;
-      for (const l of this.listeners) l();
-    }
-    // Always notify on manual actions
+  private notify(): void {
+    this.version++;
     for (const l of this.listeners) l();
   }
 
   private startLoop(): void {
-    let lastFrame = Date.now();
+    let lastNotify = Date.now();
     const loop = () => {
       const now = Date.now();
-      const elapsed = now - lastFrame;
-      lastFrame = now;
+      const elapsed = now - this.state.lastTick;
 
-      runTicks(this.state, elapsed);
+      // Run ticks based on time since lastTick
+      const tickMs = 1000 / 5; // TICKS_PER_SECOND = 5
+      const ticksToRun = Math.floor(elapsed / tickMs);
+      if (ticksToRun > 0) {
+        for (let i = 0; i < ticksToRun; i++) {
+          runTick(this.state);
+        }
+        this.state.lastTick += ticksToRun * tickMs;
+        this.version++;
 
-      // Throttled snapshot
-      if (now - this.lastSnapshot >= this.snapshotInterval) {
-        this.lastSnapshot = now;
-        for (const l of this.listeners) l();
+        // Throttled UI notify
+        if (now - lastNotify >= this.snapshotInterval) {
+          lastNotify = now;
+          for (const l of this.listeners) l();
+        }
       }
       this.rafId = requestAnimationFrame(loop);
     };

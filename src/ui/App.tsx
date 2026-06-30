@@ -12,10 +12,14 @@ import TechPanel from './TechPanel';
 import LogPanel from './LogPanel';
 
 const App: React.FC = () => {
-  const state = useSyncExternalStore(
+  // Subscribe to version counter for re-renders
+  useSyncExternalStore(
     useCallback((cb: () => void) => store.subscribe(cb), []),
     () => store.getSnapshot(),
   );
+
+  // Always read fresh state from the mutable store
+  const state = store.getRawState();
 
   const [activeTab, setActiveTab] = useState<'build' | 'jobs' | 'tech'>('build');
 
